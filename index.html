@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Submarine Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Game state
+const STATE = { START: 0, PLAYING: 1, OVER: 2 };
+let state = STATE.START;
+let score = 0;
+let bestScore = 0;
+let frameCount = 0;
+
+// Submarine
+const sub = {
+  x: 0,
+  y: 0,
+  w: 70,
+  h: 35,
+  vy: 0,
+  gravity: 0.3,
+  lift: -0.6,
+  maxSpeed: 5
+};
+
+// Input
+let spaceDown = false;
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (state === STATE.START) { state = STATE.PLAYING; }
+    else if (state === STATE.OVER) { restart(); }
+    spaceDown = true;
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') spaceDown = false;
+});
+
+// Touch support
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (state === STATE.START) { state = STATE.PLAYING; }
+  else if (state === STATE.OVER) { restart(); }
+  spaceDown = true;
+});
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  spaceDown = false;
+});
+
+// Obstacles
+let obstacles = [];
+const obstacleWidth = 50;
+let obstacleSpeed = 3;
+let spawnTimer = 0;
+const spawnInterval = 100; // frames between spawns
+const gapSize = 160;
+
+function spawnObstacle() {
+  const minY = 80;
+  const maxY = canvas.height - 80 - gapSize;
+  const gapTop = minY + Math.random() * (maxY - minY);
+  obstacles.push({
+    x: canvas.width,
+    gapTop: gapTop,
+    scored: false
+  });
+}
+
+// Bubbles
+let bubbles = [];
+function spawnBubble() {
+  bubbles.push({
+    x: sub.x + sub.w * 0.3 + Math.random() * 10,
+    y: sub.y + Math.random() * sub.h,
+    r: 2 + Math.random() * 3,
+    vy: -1 - Math.random() * 1.5,
+    vx: -0.5 + Math.random(),
+    alpha: 0.6 + Math.random() * 0.4
+  });
+}
+
+// Background bubbles (ambient)
+let bgBubbles = [];
+function initBgBubbles() {
+  bgBubbles = [];
+  for (let i = 0; i < 20; i++) {
+    bgBubbles.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: 1 + Math.random() * 4,
+      vy: -0.3 - Math.random() * 0.7,
+      alpha: 0.1 + Math.random() * 0.2
+    });
+  }
+}
+initBgBubbles();
+
+function restart() {
+  sub.y = canvas.height / 2;
+  sub.vy = 0;
+  obstacles = [];
+  bubbles = [];
+  score = 0;
+  frameCount = 0;
+  obstacleSpeed = 3;
+  spawnTimer = 0;
+  state = STATE.PLAYING;
+}
+
+function init() {
+  sub.x = canvas.width * 0.2;
+  sub.y = canvas.height / 2;
+}
+init();
+
+// Draw functions
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#0a3d6b');
+  grad.addColorStop(0.3, '#0c4a7a');
+  grad.addColorStop(0.7, '#062a4a');
+  grad.addColorStop(1, '#031a2e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Water surface shimmer
+  ctx.save();
+  ctx.globalAlpha = 0.15;
+  for (let i = 0; i < canvas.width; i += 30) {
+    const waveY = 8 * Math.sin((i + frameCount * 2) * 0.03);
+    ctx.fillStyle = '#4db8ff';
+    ctx.fillRect(i, waveY, 20, 4);
+  }
+  ctx.restore();
+
+  // Ocean floor
+  ctx.fillStyle = '#1a3a2a';
+  ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
+  ctx.fillStyle = '#2a5a3a';
+  for (let i = 0; i < canvas.width; i += 40) {
+    const h = 8 + Math.sin(i * 0.1) * 6;
+    ctx.beginPath();
+    ctx.moveTo(i, canvas.height - 30);
+    ctx.lineTo(i + 20, canvas.height - 30 - h);
+    ctx.lineTo(i + 40, canvas.height - 30);
+    ctx.fill();
+  }
+
+  // Background bubbles
+  ctx.save();
+  for (const b of bgBubbles) {
+    ctx.globalAlpha = b.alpha;
+    ctx.strokeStyle = '#88ccff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSubmarine() {
+  ctx.save();
+  ctx.translate(sub.x + sub.w / 2, sub.y + sub.h / 2);
+
+  // Tilt based on velocity
+  const tilt = sub.vy * 0.03;
+  ctx.rotate(tilt);
+
+  const hw = sub.w / 2;
+  const hh = sub.h / 2;
+
+  // Body shadow
+  ctx.fillStyle = '#cc8800';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, hw, hh, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Main body
+  const bodyGrad = ctx.createLinearGradient(0, -hh, 0, hh);
+  bodyGrad.addColorStop(0, '#ffcc00');
+  bodyGrad.addColorStop(0.5, '#e6a800');
+  bodyGrad.addColorStop(1, '#cc8800');
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#996600';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Conning tower (periscope base)
+  ctx.fillStyle = '#e6a800';
+  ctx.fillRect(-8, -hh - 10, 16, 12);
+  ctx.strokeStyle = '#996600';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-8, -hh - 10, 16, 12);
+
+  // Periscope
+  ctx.fillStyle = '#996600';
+  ctx.fillRect(-2, -hh - 18, 4, 10);
+  ctx.fillRect(-2, -hh - 20, 10, 4);
+
+  // Window
+  ctx.fillStyle = '#66ccff';
+  ctx.beginPath();
+  ctx.arc(hw * 0.35, 0, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#996600';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Window shine
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.arc(hw * 0.35 - 2, -2, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Propeller
+  const propX = -hw - 5;
+  ctx.save();
+  ctx.translate(propX, 0);
+  ctx.rotate(frameCount * 0.3);
+  ctx.fillStyle = '#777';
+  for (let i = 0; i < 3; i++) {
+    ctx.save();
+    ctx.rotate((Math.PI * 2 / 3) * i);
+    ctx.beginPath();
+    ctx.ellipse(0, -8, 3, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.fillStyle = '#555';
+  ctx.beginPath();
+  ctx.arc(0, 0, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function drawObstacles() {
+  for (const obs of obstacles) {
+    // Top obstacle (rock)
+    const topGrad = ctx.createLinearGradient(obs.x, 0, obs.x + obstacleWidth, 0);
+    topGrad.addColorStop(0, '#3a6a4a');
+    topGrad.addColorStop(0.5, '#4a8a5a');
+    topGrad.addColorStop(1, '#3a6a4a');
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(obs.x, 0, obstacleWidth, obs.gapTop);
+
+    // Top rock edge
+    ctx.fillStyle = '#2a5a3a';
+    ctx.beginPath();
+    ctx.moveTo(obs.x - 5, obs.gapTop);
+    ctx.lineTo(obs.x + obstacleWidth / 2, obs.gapTop + 15);
+    ctx.lineTo(obs.x + obstacleWidth + 5, obs.gapTop);
+    ctx.fill();
+
+    // Bottom obstacle
+    const botTop = obs.gapTop + gapSize;
+    const botGrad = ctx.createLinearGradient(obs.x, 0, obs.x + obstacleWidth, 0);
+    botGrad.addColorStop(0, '#3a6a4a');
+    botGrad.addColorStop(0.5, '#4a8a5a');
+    botGrad.addColorStop(1, '#3a6a4a');
+    ctx.fillStyle = botGrad;
+    ctx.fillRect(obs.x, botTop, obstacleWidth, canvas.height - botTop);
+
+    // Bottom rock edge
+    ctx.fillStyle = '#2a5a3a';
+    ctx.beginPath();
+    ctx.moveTo(obs.x - 5, botTop);
+    ctx.lineTo(obs.x + obstacleWidth / 2, botTop - 15);
+    ctx.lineTo(obs.x + obstacleWidth + 5, botTop);
+    ctx.fill();
+  }
+}
+
+function drawScore() {
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(score, canvas.width / 2, 40);
+}
+
+function drawStartScreen() {
+  drawBackground();
+
+  // Place submarine in center for title screen
+  const savedY = sub.y;
+  sub.y = canvas.height / 2 - sub.h / 2 + Math.sin(frameCount * 0.03) * 15;
+  sub.x = canvas.width / 2 - sub.w / 2;
+  drawSubmarine();
+  sub.y = savedY;
+  sub.x = canvas.width * 0.2;
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 48px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SUBMARINE', canvas.width / 2, canvas.height / 2 - 80);
+
+  ctx.fillStyle = '#88ccff';
+  ctx.font = '20px monospace';
+  ctx.fillText('Press SPACE to dive', canvas.width / 2, canvas.height / 2 + 60);
+
+  ctx.fillStyle = '#5599bb';
+  ctx.font = '14px monospace';
+  ctx.fillText('Hold SPACE to rise \u2022 Release to sink', canvas.width / 2, canvas.height / 2 + 90);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 48px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px monospace';
+  ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 10);
+
+  if (bestScore > 0) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '18px monospace';
+    ctx.fillText('Best: ' + bestScore, canvas.width / 2, canvas.height / 2 + 40);
+  }
+
+  ctx.fillStyle = '#88ccff';
+  ctx.font = '18px monospace';
+  ctx.fillText('Press SPACE to retry', canvas.width / 2, canvas.height / 2 + 80);
+}
+
+function drawBubbles() {
+  ctx.save();
+  for (const b of bubbles) {
+    ctx.globalAlpha = b.alpha;
+    ctx.strokeStyle = '#88ddff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.stroke();
+    // Shine
+    ctx.fillStyle = 'rgba(200,240,255,0.3)';
+    ctx.beginPath();
+    ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.3, b.r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Update functions
+function updateSubmarine() {
+  if (spaceDown) {
+    sub.vy += sub.lift;
+  }
+  sub.vy += sub.gravity;
+  sub.vy = Math.max(-sub.maxSpeed, Math.min(sub.maxSpeed, sub.vy));
+  sub.y += sub.vy;
+
+  // Clamp to bounds
+  if (sub.y < 0) { sub.y = 0; sub.vy = 0; }
+  if (sub.y + sub.h > canvas.height - 30) { sub.y = canvas.height - 30 - sub.h; sub.vy = 0; state = STATE.OVER; if (score > bestScore) bestScore = score; }
+}
+
+function updateObstacles() {
+  // Speed increases over time
+  obstacleSpeed = 3 + frameCount * 0.001;
+
+  spawnTimer++;
+  if (spawnTimer >= spawnInterval) {
+    spawnObstacle();
+    spawnTimer = 0;
+  }
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].x -= obstacleSpeed;
+
+    // Score when passed
+    if (!obstacles[i].scored && obstacles[i].x + obstacleWidth < sub.x) {
+      obstacles[i].scored = true;
+      score++;
+    }
+
+    // Remove off-screen
+    if (obstacles[i].x + obstacleWidth < -10) {
+      obstacles.splice(i, 1);
+    }
+  }
+}
+
+function checkCollisions() {
+  const margin = 5; // Forgiving hitbox
+  const sx = sub.x + margin;
+  const sy = sub.y + margin;
+  const sw = sub.w - margin * 2;
+  const sh = sub.h - margin * 2;
+
+  for (const obs of obstacles) {
+    // Top obstacle
+    if (sx + sw > obs.x && sx < obs.x + obstacleWidth &&
+        sy < obs.gapTop) {
+      state = STATE.OVER;
+      if (score > bestScore) bestScore = score;
+      return;
+    }
+    // Bottom obstacle
+    const botTop = obs.gapTop + gapSize;
+    if (sx + sw > obs.x && sx < obs.x + obstacleWidth &&
+        sy + sh > botTop) {
+      state = STATE.OVER;
+      if (score > bestScore) bestScore = score;
+      return;
+    }
+  }
+
+  // Hit ceiling
+  if (sub.y <= 0) {
+    state = STATE.OVER;
+    if (score > bestScore) bestScore = score;
+  }
+}
+
+function updateBubbles() {
+  // Spawn from submarine exhaust
+  if (frameCount % 4 === 0) {
+    spawnBubble();
+  }
+
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.y += b.vy;
+    b.x += b.vx;
+    b.alpha -= 0.008;
+    if (b.alpha <= 0 || b.y < -10) {
+      bubbles.splice(i, 1);
+    }
+  }
+
+  // Background bubbles
+  for (const b of bgBubbles) {
+    b.y += b.vy;
+    if (b.y < -10) {
+      b.y = canvas.height + 10;
+      b.x = Math.random() * canvas.width;
+    }
+  }
+}
+
+// Main loop
+function loop() {
+  frameCount++;
+
+  if (state === STATE.START) {
+    drawStartScreen();
+    updateBubbles();
+  } else if (state === STATE.PLAYING) {
+    updateSubmarine();
+    updateObstacles();
+    checkCollisions();
+    updateBubbles();
+
+    drawBackground();
+    drawObstacles();
+    drawBubbles();
+    drawSubmarine();
+    drawScore();
+  } else if (state === STATE.OVER) {
+    drawBackground();
+    drawObstacles();
+    drawBubbles();
+    drawSubmarine();
+    drawScore();
+    drawGameOver();
+    updateBubbles();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
