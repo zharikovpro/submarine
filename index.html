@@ -30,6 +30,11 @@ let score = 0;
 let bestScore = 0;
 let frameCount = 0;
 
+// Delta time — normalize physics to 60fps
+const TARGET_DT = 1000 / 60;
+let lastTime = 0;
+let dt = 1; // multiplier: 1.0 at 60fps, 0.5 at 120fps
+
 // Submarine
 const sub = {
   x: 0,
@@ -116,6 +121,8 @@ function initBgBubbles() {
 }
 initBgBubbles();
 
+let gameTime = 0; // seconds elapsed while playing
+
 function restart() {
   sub.y = canvas.height / 2;
   sub.vy = 0;
@@ -123,6 +130,7 @@ function restart() {
   bubbles = [];
   score = 0;
   frameCount = 0;
+  gameTime = 0;
   obstacleSpeed = 3;
   spawnTimer = 0;
   state = STATE.PLAYING;
@@ -320,13 +328,14 @@ function drawStartScreen() {
   ctx.textAlign = 'center';
   ctx.fillText('SUBMARINE', canvas.width / 2, canvas.height / 2 - 80);
 
+  const isMobile = 'ontouchstart' in window;
   ctx.fillStyle = '#88ccff';
   ctx.font = '20px monospace';
-  ctx.fillText('Press SPACE to dive', canvas.width / 2, canvas.height / 2 + 60);
+  ctx.fillText(isMobile ? 'Tap to dive' : 'Press SPACE to dive', canvas.width / 2, canvas.height / 2 + 60);
 
   ctx.fillStyle = '#5599bb';
   ctx.font = '14px monospace';
-  ctx.fillText('Hold SPACE to rise \u2022 Release to sink', canvas.width / 2, canvas.height / 2 + 90);
+  ctx.fillText(isMobile ? 'Hold to rise \u2022 Release to sink' : 'Hold SPACE to rise \u2022 Release to sink', canvas.width / 2, canvas.height / 2 + 90);
 }
 
 function drawGameOver() {
@@ -350,7 +359,7 @@ function drawGameOver() {
 
   ctx.fillStyle = '#88ccff';
   ctx.font = '18px monospace';
-  ctx.fillText('Press SPACE to retry', canvas.width / 2, canvas.height / 2 + 80);
+  ctx.fillText('ontouchstart' in window ? 'Tap to retry' : 'Press SPACE to retry', canvas.width / 2, canvas.height / 2 + 80);
 }
 
 function drawBubbles() {
@@ -374,11 +383,11 @@ function drawBubbles() {
 // Update functions
 function updateSubmarine() {
   if (spaceDown) {
-    sub.vy += sub.lift;
+    sub.vy += sub.lift * dt;
   }
-  sub.vy += sub.gravity;
+  sub.vy += sub.gravity * dt;
   sub.vy = Math.max(-sub.maxSpeed, Math.min(sub.maxSpeed, sub.vy));
-  sub.y += sub.vy;
+  sub.y += sub.vy * dt;
 
   // Clamp to bounds
   if (sub.y < 0) { sub.y = 0; sub.vy = 0; }
@@ -386,17 +395,17 @@ function updateSubmarine() {
 }
 
 function updateObstacles() {
-  // Speed increases over time
-  obstacleSpeed = 3 + frameCount * 0.001;
+  // Speed increases over time (gameTime is frame-rate independent)
+  obstacleSpeed = 3 + gameTime * 0.06;
 
-  spawnTimer++;
+  spawnTimer += dt;
   if (spawnTimer >= spawnInterval) {
     spawnObstacle();
     spawnTimer = 0;
   }
 
   for (let i = obstacles.length - 1; i >= 0; i--) {
-    obstacles[i].x -= obstacleSpeed;
+    obstacles[i].x -= obstacleSpeed * dt;
 
     // Score when passed
     if (!obstacles[i].scored && obstacles[i].x + obstacleWidth < sub.x) {
@@ -443,17 +452,20 @@ function checkCollisions() {
   }
 }
 
+let bubbleTimer = 0;
 function updateBubbles() {
-  // Spawn from submarine exhaust
-  if (frameCount % 4 === 0) {
+  // Spawn from submarine exhaust (time-based)
+  bubbleTimer += dt;
+  if (bubbleTimer >= 4) {
     spawnBubble();
+    bubbleTimer = 0;
   }
 
   for (let i = bubbles.length - 1; i >= 0; i--) {
     const b = bubbles[i];
-    b.y += b.vy;
-    b.x += b.vx;
-    b.alpha -= 0.008;
+    b.y += b.vy * dt;
+    b.x += b.vx * dt;
+    b.alpha -= 0.008 * dt;
     if (b.alpha <= 0 || b.y < -10) {
       bubbles.splice(i, 1);
     }
@@ -461,7 +473,7 @@ function updateBubbles() {
 
   // Background bubbles
   for (const b of bgBubbles) {
-    b.y += b.vy;
+    b.y += b.vy * dt;
     if (b.y < -10) {
       b.y = canvas.height + 10;
       b.x = Math.random() * canvas.width;
@@ -470,8 +482,13 @@ function updateBubbles() {
 }
 
 // Main loop
-function loop() {
+function loop(timestamp) {
+  if (lastTime === 0) lastTime = timestamp;
+  const elapsed = timestamp - lastTime;
+  lastTime = timestamp;
+  dt = Math.min(elapsed / TARGET_DT, 3); // cap at 3x to avoid spiral of death
   frameCount++;
+  if (state === STATE.PLAYING) gameTime += elapsed / 1000;
 
   if (state === STATE.START) {
     drawStartScreen();
